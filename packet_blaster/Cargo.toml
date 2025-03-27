@@ -14,9 +14,12 @@ once_cell = { workspace = true }
 quinn = { workspace = true }
 rustls = { workspace = true }
 solana-client = { workspace = true }
-solana-net-utils = { workspace = true }
-solana-perf = { workspace = true }
 solana-sdk = { workspace = true }
 solana-streamer = { workspace = true }
+solana-connection-cache = { workspace = true }
+solana-quic-client = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+
+pkcs8 = { version = "0.8.0", features = ["alloc"] }
+rcgen = "0.9.3"

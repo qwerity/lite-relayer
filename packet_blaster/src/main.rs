@@ -17,16 +17,25 @@ use log::*;
 use once_cell::sync::Lazy;
 use solana_client::{
     client_error::{ClientError, ClientErrorKind},
-    nonblocking::quic_client::QuicLazyInitializedEndpoint,
-    quic_client::QuicTpuConnection,
     rpc_client::RpcClient,
-    tpu_connection::TpuConnection,
 };
+use solana_connection_cache::client_connection::ClientConnection;
+use solana_connection_cache::connection_cache_stats::ConnectionCacheStats;
+use solana_quic_client::{
+    quic_client::QuicClientConnection,
+    nonblocking::quic_client::QuicLazyInitializedEndpoint,
+};
+
 use solana_sdk::{
     native_token::LAMPORTS_PER_SOL,
     pubkey::Pubkey,
     signature::{Keypair, Signature, Signer},
     system_transaction::transfer,
+};
+
+use {
+    pkcs8::{der::Document, AlgorithmIdentifier, ObjectIdentifier},
+    rcgen::{CertificateParams, DistinguishedName, DnType, SanType},
 };
 
 #[derive(Parser, Clone, Debug)]
@@ -254,7 +263,7 @@ enum TpuSender {
         sleep_interval: Duration,
     },
     Quic {
-        client: QuicTpuConnection,
+        client: QuicClientConnection,
     },
 }
 
@@ -293,12 +302,52 @@ pub enum PacketBlasterError {
     TransportError(#[from] solana_sdk::transport::TransportError),
 }
 
+pub fn new_self_signed_tls_certificate_chain(
+    keypair: &Keypair,
+    san: IpAddr,
+) -> Result<(Vec<rustls::Certificate>, rustls::PrivateKey), Box<dyn std::error::Error>> {
+    const ED25519_IDENTIFIER: [u32; 4] = [1, 3, 101, 112];
+    let mut private_key = Vec::<u8>::with_capacity(34);
+    private_key.extend_from_slice(&[0x04, 0x20]); // ASN.1 OCTET STRING
+    private_key.extend_from_slice(keypair.secret().as_bytes());
+    let key_pkcs8 = pkcs8::PrivateKeyInfo {
+        algorithm: AlgorithmIdentifier {
+            oid: ObjectIdentifier::from_arcs(&ED25519_IDENTIFIER).expect("Failed to convert OID"),
+            parameters: None,
+        },
+        private_key: &private_key,
+        public_key: None,
+    };
+    let key_pkcs8_der = key_pkcs8
+        .to_der()
+        .expect("Failed to convert keypair to DER")
+        .to_der();
+
+    let rcgen_keypair = rcgen::KeyPair::from_der(&key_pkcs8_der)?;
+
+    let mut cert_params = CertificateParams::default();
+    cert_params.subject_alt_names = vec![SanType::IpAddress(san)];
+    cert_params.alg = &rcgen::PKCS_ED25519;
+    cert_params.key_pair = Some(rcgen_keypair);
+    cert_params.distinguished_name = DistinguishedName::new();
+    cert_params
+        .distinguished_name
+        .push(DnType::CommonName, "Safecoin node");
+
+    let cert = rcgen::Certificate::from_params(cert_params)?;
+    let cert_der = cert.serialize_der().unwrap();
+    let priv_key = cert.serialize_private_key_der();
+    let priv_key = rustls::PrivateKey(priv_key);
+    let cert_chain = vec![rustls::Certificate(cert_der)];
+    Ok((cert_chain, priv_key))
+}
+
 impl TpuSender {
     // source taken from https://github.com/solana-labs/solana/blob/527e2d4f59c6429a4a959d279738c872b97e56b5/client/src/nonblocking/quic_client.rs#L93
     // original code doesn't allow specifying source socket
     fn create_endpoint(send_addr: SocketAddr) -> quinn::Endpoint {
         let (certs, priv_key) =
-            solana_streamer::tls_certificates::new_self_signed_tls_certificate_chain(
+            new_self_signed_tls_certificate_chain(
                 &Keypair::new(),
                 send_addr.ip(),
             )
@@ -317,12 +366,10 @@ impl TpuSender {
 
         let mut transport_config = quinn::TransportConfig::default();
         let timeout = quinn::IdleTimeout::from(quinn::VarInt::from_u32(
-            solana_sdk::quic::QUIC_MAX_TIMEOUT_MS * 100, /* Hack for when relayer is backed up and not accepting connections */
+            (solana_sdk::quic::QUIC_MAX_TIMEOUT.as_millis() as u32) * 100, /* Hack for when relayer is backed up and not accepting connections */
         ));
         transport_config.max_idle_timeout(Some(timeout));
-        transport_config.keep_alive_interval(Some(Duration::from_millis(
-            solana_sdk::quic::QUIC_KEEP_ALIVE_MS,
-        )));
+        transport_config.keep_alive_interval(Some(solana_sdk::quic::QUIC_KEEP_ALIVE));
         config.transport_config(Arc::new(transport_config));
 
         endpoint.set_default_client_config(config);
@@ -365,7 +412,7 @@ impl TpuSender {
                 })
             }
             Mode::Quic => Ok(TpuSender::Quic {
-                client: QuicTpuConnection::new(
+                client: QuicClientConnection::new(
                     Arc::new(QuicLazyInitializedEndpoint::default()),
                     args.tpu_addr,
                     Arc::new(ConnectionCacheStats::default()),
@@ -441,7 +488,7 @@ impl TpuSender {
             }
             TpuSender::Quic { client } => {
                 vec![client
-                    .send_wire_transaction_batch_async(serialized_txns)
+                    .send_data_batch_async(serialized_txns)
                     .map_err(PacketBlasterError::TransportError)]
             }
         }

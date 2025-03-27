@@ -4,7 +4,7 @@ members = [
     "block_engine",
     "core",
     "jito-protos",
-    #    "packet_blaster", // TODO (LB): fix
+    "packet_blaster",
     "relayer",
     "rpc",
     "transaction-relayer",
@@ -68,6 +68,8 @@ solana-metrics = "=2.1.16"
 solana-net-utils = "=2.1.16"
 solana-perf = "=2.1.16"
 solana-program = "=2.1.16"
+solana-connection-cache = "=2.1.16"
+solana-quic-client = "=2.1.16"
 solana-rayon-threadlimit = "=2.1.16"
 solana-runtime = "=2.1.16"
 solana-sdk = "=2.1.16"
