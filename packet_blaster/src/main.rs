@@ -29,10 +29,9 @@ use solana_quic_client::{
 use solana_sdk::{
     native_token::LAMPORTS_PER_SOL,
     pubkey::Pubkey,
-    signature::{Keypair, Signature, Signer},
+    signature::{Keypair, Signature, Signer, read_keypair_file},
     system_transaction::transfer,
 };
-
 use {
     pkcs8::{der::Document, AlgorithmIdentifier, ObjectIdentifier},
     rcgen::{CertificateParams, DistinguishedName, DnType, SanType},
@@ -114,9 +113,7 @@ fn read_keypairs(path: PathBuf) -> io::Result<Vec<Keypair>> {
             .collect::<Vec<_>>();
         Ok(result)
     } else {
-        Ok(vec![Keypair::from_bytes(&fs::read(path)?).map_err(
-            |e| io::Error::new(ErrorKind::NotFound, e.to_string()),
-        )?])
+        Ok(vec![read_keypair_file(&path).map_err(|e| io::Error::new(ErrorKind::NotFound, e.to_string()),)?])
     }
 }
 
