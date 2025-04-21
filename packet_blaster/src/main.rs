@@ -148,18 +148,6 @@ fn main() {
     dbg!(&args);
 
     let keypairs = read_keypairs(args.keypair_path.clone()).expect("Failed to read keypairs");
-    let pubkeys = keypairs
-        .iter()
-        .map(|kp| kp.pubkey())
-        .collect::<Vec<Pubkey>>();
-
-    let starting_port = 1024 + args.ip_port_offset;
-    info!(
-        "Packet blaster will send on ports {}..={} with {} pubkeys: {pubkeys:?}",
-        starting_port,
-        starting_port + pubkeys.len() as u16,
-        pubkeys.len()
-    );
 
     let threads: Vec<_> = keypairs
         .into_iter()
