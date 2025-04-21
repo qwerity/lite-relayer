@@ -190,7 +190,10 @@ fn main() {
 
                             curr_success_count = 0;
                             curr_fail_count = 0;
-                            latest_blockhash = client.get_latest_blockhash().unwrap();
+                            latest_blockhash = client.get_latest_blockhash().unwrap_or_else(|e|{
+                                warn!("Failed to get latest blockhash, err: {e}");
+                                latest_blockhash
+                            });
                         }
 
                         let count = cumm_success_count
