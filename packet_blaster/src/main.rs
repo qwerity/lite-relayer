@@ -167,7 +167,7 @@ fn main() {
                     let mut latest_blockhash = client.get_latest_blockhash().unwrap();
                     let mut curr_success_count = 0u64;
                     let mut curr_fail_count = 0u64;
-                    let mut cumm_success_count = 0u64;
+                    let mut cumm_success_count = 1000u64;
                     let mut cumm_fail_count = 0u64;
                     loop {
                         let now = Instant::now();
