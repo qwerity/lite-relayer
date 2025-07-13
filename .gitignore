@@ -10,3 +10,10 @@
 
 .env
 docker-output/
+
+#tests
+/auth
+/auth.pub
+/blaster.json
+/id.json
+/relayer.json

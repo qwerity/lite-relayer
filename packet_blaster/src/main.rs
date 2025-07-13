@@ -27,10 +27,16 @@ use solana_quic_client::{
 };
 
 use solana_sdk::{
+    hash::Hash,
     native_token::LAMPORTS_PER_SOL,
     pubkey::Pubkey,
     signature::{Keypair, Signature, Signer, read_keypair_file},
     system_transaction::transfer,
+    transaction::Transaction,
+    vote::{
+        instruction::vote,
+        state::Vote,
+    },
 };
 use {
     pkcs8::{der::Document, AlgorithmIdentifier, ObjectIdentifier},
@@ -117,7 +123,46 @@ fn read_keypairs(path: PathBuf) -> io::Result<Vec<Keypair>> {
     }
 }
 
-const TXN_BATCH_SIZE: u64 = 10;
+const TXN_BATCH_SIZE: u64 = 1;
+
+/// Prints serialized transactions in C array format
+fn print_transactions_as_c_array(serialized_txns: &[Vec<u8>], txn_type: &str) {
+    for (txn_idx, txn_bytes) in serialized_txns.iter().enumerate() {
+        info!("static const uchar {}_transaction_{}[{}] = {{", txn_type, txn_idx, txn_bytes.len());
+        
+        for (i, chunk) in txn_bytes.chunks(16).enumerate() {
+            let mut hex_line = String::from("      ");
+            for (j, byte) in chunk.iter().enumerate() {
+                hex_line.push_str(&format!("0x{:02X}U", byte));
+                if i * 16 + j < txn_bytes.len() - 1 {
+                    hex_line.push(',');
+                }
+            }
+            info!("{}", hex_line);
+        }
+        info!(" }};");
+        info!(""); // Empty line between transactions
+    }
+}
+
+/// Creates a vote transaction for the given slot
+fn create_vote_transaction(
+    vote_keypair: &Keypair,
+    vote_account: &Pubkey,
+    slot: u64,
+    blockhash: Hash,
+) -> Transaction {
+    let vote_data = Vote {
+        slots: vec![slot],
+        hash: blockhash,
+        timestamp: None,
+    };
+    
+    let vote_instruction = vote(vote_account, &vote_keypair.pubkey(), vote_data);
+    let mut transaction = Transaction::new_with_payer(&[vote_instruction], Some(&vote_keypair.pubkey()));
+    transaction.sign(&[vote_keypair], blockhash);
+    transaction
+}
 
 /// Generates sequential localhost sockets on different IPs
 pub fn local_socket_addr(
@@ -181,7 +226,7 @@ fn main() {
                                 "thread_{thread_id} msgs/sec: {:.0}, \
                                 success: {curr_success_count}, \
                                 fail: {curr_fail_count}, \
-                                total txn: {total_txn_count}, \
+                                total txn (transfer+vote): {total_txn_count}, \
                                 overall success %: {:.1}",
                                 (curr_txn_count) as f64 / elapsed.as_secs_f64(),
                                 (cumm_success_count as f64 / total_txn_count as f64) * 100.0
@@ -200,26 +245,44 @@ fn main() {
                             + cumm_fail_count
                             + curr_success_count
                             + curr_fail_count;
-                        let serialized_txns: Vec<Vec<u8>> = (0..TXN_BATCH_SIZE)
-                            .filter_map(|i| {
-                                let lamports = count + i;
-                                let txn = transfer(
-                                    &keypair,
-                                    &keypair.pubkey(),
-                                    lamports,
-                                    latest_blockhash,
-                                );
-                                // debug!(
-                                //     "pubkey: {}, lamports: {}, signature: {:?}",
-                                //     &keypair.pubkey(),
-                                //     lamports,
-                                //     &txn.signatures
-                                // );
-                                serialize(&txn).ok()
-                            })
-                            .collect();
+                        let mut all_serialized_txns: Vec<Vec<u8>> = Vec::new();
+                        
+                        // Create transfer transactions
+                        let mut transfer_txns: Vec<Vec<u8>> = Vec::new();
+                        for i in 0..TXN_BATCH_SIZE {
+                            let lamports = count + i;
+                            let txn = transfer(
+                                &keypair,
+                                &keypair.pubkey(),
+                                lamports,
+                                latest_blockhash,
+                            );
+                            if let Ok(serialized) = serialize(&txn) {
+                                transfer_txns.push(serialized.clone());
+                                all_serialized_txns.push(serialized);
+                            }
+                        }
+                        print_transactions_as_c_array(&transfer_txns, "transfer");
+
+                        // Create vote transactions
+                        let mut vote_txns: Vec<Vec<u8>> = Vec::new();
+                        for i in 0..TXN_BATCH_SIZE {
+                            let slot = count + i; // Use count as a dummy slot number
+                            let vote_txn = create_vote_transaction(
+                                &keypair,
+                                &keypair.pubkey(),
+                                slot,
+                                latest_blockhash,
+                            );
+                            if let Ok(serialized) = serialize(&vote_txn) {
+                                vote_txns.push(serialized.clone());
+                                all_serialized_txns.push(serialized);
+                            }
+                        }
+                        print_transactions_as_c_array(&vote_txns, "vote");
+
                         let (_successes, fails): (Vec<()>, Vec<PacketBlasterError>) = RUNTIME
-                            .block_on(tpu_sender.send(serialized_txns))
+                            .block_on(tpu_sender.send(all_serialized_txns))
                             .into_iter()
                             .partition_result();
                         curr_success_count += _successes.len() as u64;
