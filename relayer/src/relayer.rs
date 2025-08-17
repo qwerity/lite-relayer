@@ -608,7 +608,9 @@ impl RelayerImpl {
             .filter_map(|(pubkey, sender)| {
                 // try send because it's a bounded channel and we don't want to block if the channel is full
                 match sender.try_send(Ok(SubscribePacketsResponse {
-                    header: None,
+                    header: Some(Header {
+                        ts: Some(Timestamp::from(SystemTime::now())),
+                    }),
                     msg: Some(subscribe_packets_response::Msg::Heartbeat(Heartbeat {
                         count: relayer_metrics.num_heartbeats,
                     })),
