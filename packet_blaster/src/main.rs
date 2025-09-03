@@ -66,6 +66,14 @@ struct Args {
     #[arg(long, env)]
     loop_sleep_micros: Option<u64>,
 
+    /// vote - to enable sending the vote trnsaction as well, by default disabled
+    #[arg(long, env, default_value_t = false)]
+    vote: bool,
+
+    /// txn-batch: to make  TXN_BATCH_SIZE an argument, the default value is 1
+    #[arg(long = "txn-batch", env, default_value_t = 1)]
+    txn_batch: u64,
+
     /// Method of connecting to Solana TPU
     #[command(subcommand)]
     connection_mode: Mode,
@@ -122,8 +130,6 @@ fn read_keypairs(path: PathBuf) -> io::Result<Vec<Keypair>> {
         Ok(vec![read_keypair_file(&path).map_err(|e| io::Error::new(ErrorKind::NotFound, e.to_string()),)?])
     }
 }
-
-const TXN_BATCH_SIZE: u64 = 1;
 
 /// Prints serialized transactions in C array format
 fn print_transactions_as_c_array(serialized_txns: &[Vec<u8>], txn_type: &str) {
@@ -249,7 +255,7 @@ fn main() {
                         
                         // Create transfer transactions
                         let mut transfer_txns: Vec<Vec<u8>> = Vec::new();
-                        for i in 0..TXN_BATCH_SIZE {
+                        for i in 0..args.txn_batch {
                             let lamports = count + i;
                             let txn = transfer(
                                 &keypair,
@@ -265,21 +271,23 @@ fn main() {
                         print_transactions_as_c_array(&transfer_txns, "transfer");
 
                         // Create vote transactions
-                        let mut vote_txns: Vec<Vec<u8>> = Vec::new();
-                        for i in 0..TXN_BATCH_SIZE {
-                            let slot = count + i; // Use count as a dummy slot number
-                            let vote_txn = create_vote_transaction(
-                                &keypair,
-                                &keypair.pubkey(),
-                                slot,
-                                latest_blockhash,
-                            );
-                            if let Ok(serialized) = serialize(&vote_txn) {
-                                vote_txns.push(serialized.clone());
-                                all_serialized_txns.push(serialized);
+                        if args.vote {
+                            let mut vote_txns: Vec<Vec<u8>> = Vec::new();
+                            for i in 0..args.txn_batch {
+                                let slot = count + i; // Use count as a dummy slot number
+                                let vote_txn = create_vote_transaction(
+                                    &keypair,
+                                    &keypair.pubkey(),
+                                    slot,
+                                    latest_blockhash,
+                                );
+                                if let Ok(serialized) = serialize(&vote_txn) {
+                                    vote_txns.push(serialized.clone());
+                                    all_serialized_txns.push(serialized);
+                                }
                             }
+                            print_transactions_as_c_array(&vote_txns, "vote");
                         }
-                        print_transactions_as_c_array(&vote_txns, "vote");
 
                         let (_successes, fails): (Vec<()>, Vec<PacketBlasterError>) = RUNTIME
                             .block_on(tpu_sender.send(all_serialized_txns))
